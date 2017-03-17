@@ -1,79 +1,60 @@
-#!/usr/bin/env python
-# 
+# !/usr/bin/env python
+#
 # tournament.py -- implementation of a Swiss-system tournament
 #
 
-from functools import update_wrapper
 import psycopg2
 
-
 def connect():
-    """Connect to the PostgreSQL database.  Returns a database connection."""
-    return psycopg2.connect("dbname=tournament")
+    """Connect to the PostgreSQL database.
+    Returns a database connection and the database cursor."""
+    try:
+        db = psycopg2.connect("dbname=tournament")
+        cursor = db.cursor()
+        return db, cursor
+    except:
+        print("Sorry, unable to connect to database")
 
-def decorator(d):
-    """Make function d a decorator; d wraps a function fn."""
-    def _d(fn):
-        return update_wrapper(d(fn), fn)
-    update_wrapper(_d, d)
-    return _d
+def deleteMatches():
+    """Remove all the match records from the database. Use with caution!"""
+    db, cursor = connect()
+    cursor.execute("TRUNCATE matches CASCADE;")
+    db.commit()
+    db.close()
 
-@decorator
-def basic_query(fn):
-    """A decorator function for basic SELECT queries."""
-    def _fn():
-        conn = connect()
-        cur = conn.cursor()
-        response = fn(cur)
-        conn.close()
-        return response
-    return _fn
+def deletePlayers():
+    """Remove all the player records from the database. Use with caution!"""
+    db, cursor = connect()
+    cursor.execute("TRUNCATE players CASCADE;")
+    db.commit()
+    db.close()
 
-@decorator
-def transaction_query(fn):
-    """A decorator function for queries that create transaction."""
-    def _fn(*args):
-        conn = connect()
-        cur = conn.cursor()
-        fn(*args, cur=cur)
-        conn.commit()
-        conn.close()
-    return _fn
-
-@transaction_query
-def deleteMatches(cur=None):
-    """Remove all the match records from the database."""
-    sql = "DELETE FROM matches;"
-    cur.execute(sql)
-
-@transaction_query
-def deletePlayers(cur=None):
-    """Remove all the player records from the database."""
-    sql = "DELETE FROM players;"
-    cur.execute(sql)
-
-@basic_query
-def countPlayers(cur=None):
+def countPlayers():
     """Returns the number of players currently registered."""
-    sql = "SELECT count(*) FROM players;"
-    cur.execute(sql)
-    return cur.fetchone()[0]
+    db, cursor = connect()
+    query = "SELECT COUNT(*) FROM players"
+    cursor.execute(query)
+    player_count = cursor.fetchone()[0]
+    db.close()
+    return player_count
 
-@transaction_query
-def registerPlayer(name, cur=None):
+def registerPlayer(name):
     """Adds a player to the tournament database.
-  
+
     The database assigns a unique serial id number for the player.  (This
     should be handled by your SQL database schema, not in your Python code.)
-  
+
     Args:
       name: the player's full name (need not be unique).
     """
-    sql = "INSERT INTO players VALUES (%s);"
-    cur.execute(sql, (name,))
+    db, cursor = connect()
+    query = "INSERT INTO players (name) VALUES (%s)"
+    param = (name,)
+    cursor.execute(query, param)
+    db.commit()
+    db.close()
 
-@basic_query
-def playerStandings(cur=None):
+def playerStandings():
     """Returns a list of the players and their win records, sorted by wins.
 
     The first entry in the list should be the player in first place, or a player
@@ -86,40 +67,35 @@ def playerStandings(cur=None):
         wins: the number of matches the player has won
         matches: the number of matches the player has played
     """
-    sql = "SELECT * FROM standings;"
-    cur.execute(sql)
-    return cur.fetchall()
+    db, cursor = connect()
+    query = "SELECT * FROM standings"
+    cursor.execute(query)
+    league = cursor.fetchall()
+    db.close()
+    return league
 
-@transaction_query
-def reportMatch(winner, loser, draw=False, cur=None):
+def reportMatch(winner, loser):
     """Records the outcome of a single match between two players.
-
-       Winner gets 1 point
-       Loser gets 0 point
-       If the match is draw, then both player gets 0.5 point
 
     Args:
       winner:  the id number of the player who won
       loser:  the id number of the player who lost
-      draw:  boolean value which represents a draw match. Default is false
     """
-    if not draw:
-        winner_sql = "INSERT INTO matches VALUES (1, %s);"
-        loser_sql = "INSERT INTO matches VALUES (0, %s);"
-    else:
-        winner_sql = "INSERT INTO matches VALUES (0.5, %s);"
-        loser_sql = "INSERT INTO matches VALUES (0.5, %s);"
-    cur.execute(winner_sql, (winner,))
-    cur.execute(loser_sql, (loser,))
- 
+    db, cursor = connect()
+    query = "INSERT INTO matches (winner, loser) VALUES (%s,%s)"
+    param = (winner, loser,)
+    cursor.execute(query, param)
+    db.commit()
+    db.close()
+
 def swissPairings():
     """Returns a list of pairs of players for the next round of a match.
-  
+
     Assuming that there are an even number of players registered, each player
     appears exactly once in the pairings.  Each player is paired with another
     player with an equal or nearly-equal win record, that is, a player adjacent
     to him or her in the standings.
-  
+
     Returns:
       A list of tuples, each of which contains (id1, name1, id2, name2)
         id1: the first player's unique id
@@ -128,5 +104,8 @@ def swissPairings():
         name2: the second player's name
     """
     standings = playerStandings()
-    return [(standings[i-1][0], standings[i-1][1], standings[i][0], standings[i][1])
-            for i in range(1, len(standings), 2)]
+    match_pairs = []
+    for player1, player2 in zip(standings[0::2], standings[1::2]):
+        match_pairs.append((player1[0], player1[1], player2[0], player2[1]))
+    # print match_pairs
+    return match_pairs
